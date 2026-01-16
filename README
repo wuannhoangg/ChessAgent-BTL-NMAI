@@ -1,0 +1,331 @@
+# ♟️ Chess AI – MLP from Scratch & Minimax
+
+> **Môn học:** Trí tuệ Nhân tạo (HCMUT)  
+> **Bài tập lớn:** Game Playing – Cờ vua
+---
+
+## 1. Mục tiêu của project
+
+Dự án hiện thực một AI chơi cờ vua với 2 hướng tiếp cận:
+
+1. **Minimax Agent**  
+   - Thuật toán Minimax + cắt tỉa Alpha–Beta  
+   - Đánh giá thế cờ bằng **giá trị quân + bảng điểm vị trí (Piece-Square Tables)**  
+
+2. **MLP Agent (Neural Network)**   
+   - Hỗ trợ **GPU (NVIDIA)** qua `CuPy`, nếu không có GPU sẽ tự động chạy bằng CPU (`NumPy`)
+
+Trong báo cáo, nhóm có thể **so sánh**:
+
+- Minimax (thuật toán cổ điển)  
+- MLP (học từ dữ liệu)  
+- Random (baseline ngẫu nhiên)
+
+---
+
+## 2. Cấu trúc thư mục
+
+```text
+BTL2_NMAI/
+├── agents/                 # Các "đấu thủ" (Agents)
+│   ├── minimax_agent.py    # Minimax + Alpha–Beta + PST
+│   ├── mlp_agent.py        # Agent dùng model MLP
+│   └── random_agent.py     # Agent đánh ngẫu nhiên (baseline)
+├── training/
+│   ├── model_mlp.py        # MLP từ scratch: Linear, ReLU, Tanh, SGD
+│   ├── train_mlp.py        # Script train / fine-tune MLP
+│   ├── prepare_data_hf.py  # Script chuẩn bị dữ liệu từ file parquet → CSV
+│   ├── dataset_large.csv   # (Sinh ra sau khi chạy prepare_data_hf.py)
+│   └── best_model_mlp.npz  # Trọng số model đã train
+├── utils.py                # Hàm chuyển board → tensor (13 x 8 x 8)
+├── main.py                 # Chế độ chơi từng ván
+├── benchmark.py            # Benchmark nhiều ván lấy thống kê win-rate
+├── requirements.txt        # Các thư viện cần cài
+```
+
+---
+
+## 3. Cài đặt môi trường (Windows – khuyến nghị)
+
+> **Yêu cầu:**  
+> - Đã cài **Python 3.11**
+
+### 3.1. Mở PowerShell trong thư mục project
+
+- Giải nén project  
+- Chuột phải trong thư mục `BTL2_NMAI` → **Open in Terminal** hoặc mở PowerShell và `cd` đến thư mục đó.
+
+### 3.2. Tạo và kích hoạt virtualenv
+
+**Bước A – Cho phép chạy script (tạm thời cho phiên này - nếu chạy trên powershell thì mới dùng còn chạy trên cmd thì không cần):**
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+**Bước B – Tạo môi trường ảo Python 3.11:**
+
+```powershell
+py -3.11 -m venv venv-3.11
+```
+
+**Bước C – Kích hoạt môi trường ảo:**
+
+```powershell
+.venv-3.11\Scripts\activate
+```
+
+> Nếu thành công, đầu dòng lệnh sẽ có `(venv-3.11)`.
+
+### 3.3. Cài thư viện phụ thuộc
+
+```powershell
+pip install -r requirements.txt
+```
+
+## Lưu ý khi muốn dùng GPU ##
+Nếu muốn sử dụng GPU thì cần cài cupy và cuda toolkit trước.
+Chạy lệnh nvidia-smi để kiểm tra phiên bản driver GPU hiện tại sau đó cài cupy tương ứng.
+Nên cập nhật lên driver mới nhất, khi đó dùng lệnh này để tải:
+```powershell
+pip install cupy-cuda13x
+```
+Sau đó tải cuda toolkit tương ứng.
+
+## Fix bug ##
+
+Nếu bị lỗi không tìm thấy đường dẫn của CUDA thì chạy lệnh này:
+
+
+```powershell
+$env:CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
+```
+Vô C:\Program Files\NVIDIA GPU Computing Toolkit kiếm folder CUDA xem nó có folder phiên bản chưa, nếu chưa thì tải lại rồi làm.
+Nếu muốn set cứng để những lần sau không cần chạy lệnh này nữa thì tạo:
+```powershell
+New-Item -Type File -Path $PROFILE -Force     
+```
+nếu chưa có, rồi chạy:
+```powershell
+notepad $PROFILE 
+```
+Sau đó dán lệnh này $env:CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0" vào cuối file rồi lưu lại
+
+
+### 3.4. (Tuỳ chọn) GPU – CUDA + CuPy
+
+- Nếu máy có **NVIDIA GPU** và đã cài **CUDA Toolkit**, `CuPy` sẽ được sử dụng để tăng tốc train/inference.  
+- Nếu không có GPU: code tự động dùng `NumPy` (chạy chậm hơn nhưng vẫn hoạt động bình thường).
+
+---
+
+## 4. Quy trình chạy từ đầu đến cuối
+
+### Bước 1: Chuẩn bị dữ liệu
+
+Script sẽ đọc file parquet trong thư mục `training/` và sinh ra file CSV dùng để train.
+
+```bash
+python training/prepare_data_hf.py
+```
+
+- **Kết quả:** sinh file `training/dataset_large.csv`  
+- Dữ liệu gồm các thế cờ (FEN) + nhãn đánh giá `eval` trong khoảng [-1, 1]:
+
+  - 1.0  ≈ thế thắng trắng  
+  - -1.0 ≈ thế thắng đen  
+
+- Không cần chạy lại lệnh này vì dữ liệu đã được tạo.
+- Nếu muốn chạy thì cần tải file dữ liệu (.parquet) từ link này trước và bỏ vào thư mục training: https://huggingface.co/datasets/angeluriot/chess_games
+
+---
+
+### Bước 2: Train model MLP 🧠
+
+#### Cách 1 – Train từ đầu
+
+Dùng cấu hình mặc định (phù hợp để chạy demo và có kết quả cho báo cáo):
+
+```bash
+python training/train_mlp.py --epochs 30 --batch-size 64 --lr 0.01
+```
+
+- **Đầu vào:** `training/dataset_large.csv`  
+- **Đầu ra:** `training/best_model_mlp.npz` (model đã train)
+
+#### Cách 2 – Fine-tune (nâng cao, tuỳ chọn)
+
+Nếu bạn đã có model cũ và muốn fine-tune thêm:
+
+```bash
+python training/train_mlp.py --resume-from training/best_model_mlp.npz --finetune-data training/dataset_large.csv --output-path training/best_model_mlp_finetuned.npz --epochs 10 --lr 0.001
+```
+---
+
+### Bước 3: Benchmark – sinh số liệu win-rate 📊
+
+Đây là bước để **lấy số liệu cho phần đánh giá** trong BTL.
+
+Chạy:
+
+```bash
+python benchmark.py
+```
+
+Trên màn hình sẽ hiện menu:
+
+- Chọn mode:
+  - `1`: Minimax (Trắng) vs Random (Đen)  
+  - `4`: MLP Agent vs Random  (nếu đã import được MLPAgent)  
+
+Sau đó chương trình sẽ hỏi:
+
+```text
+>>> So luong van muon chay (VD: 10, 50, 100):
+```
+
+Kết thúc, chương trình sẽ in:
+
+- Số ván trắng thắng / đen thắng / hòa  
+- Tỉ lệ phần trăm (%) cho mỗi bên  
+- Kết luận **ĐẠT / CHƯA ĐẠT** so với **yêu cầu bài tập lớn**:
+
+  - **Minimax vs Random:**  
+    Yêu cầu: *Minimax thắng ≥ 90%*  
+  - **MLP vs Random:**  
+    Yêu cầu: *MLP thắng ≥ 60%*
+
+---
+
+### Bước 4: Chạy chế độ chơi để chụp hình minh hoạ 🎮
+
+#### 4.1. Chế độ terminal (CLI)
+
+```bash
+python main.py
+```
+
+- Chọn một trong các chế độ, ví dụ:
+  - Minimax (Trắng) vs Random (Đen)  
+  - MLP (Trắng) vs Minimax (Đen)
+
+- Màn hình sẽ in bàn cờ ASCII sau mỗi nước đi.  
+
+#### 4.2. Chế độ GUI (nếu file `gui_game.py` có trong project)
+
+```bash
+python gui_game.py
+```
+
+- Giao diện với đồ hoạ, tuy nhiên nó còn khá là đơn giản và cũng còn nhiều lỗi chưa fix.
+- Gồm 2 chế độ: người chơi đấu với agent (chọn 1 trong 3) và agent đấu với agent
+
+---
+
+## 5. Tóm tắt kỹ thuật
+
+### 5.1. MLP từ scratch
+
+- **Input:** tensor kích thước `13 x 8 x 8`  
+  - 12 kênh: loại quân (trắng/đen)  
+  - 1 kênh: lượt đi (Trắng = 1, Đen = -1)
+
+- **Kiến trúc:**
+  - Flatten: 13×8×8 = 832 features  
+  - Linear 832 → 1024 + ReLU  
+  - Linear 1024 → 512 + ReLU  
+  - Linear 512 → 1 + Tanh  
+  - **Đầu ra:** số thực trong [-1, 1] (xấp xỉ đánh giá thế cờ: âm = nghiêng về Đen, dương = nghiêng về Trắng)
+
+- **Huấn luyện:**
+  - Loss: **MSE (Mean Squared Error)**  
+  - Tối ưu: **SGD (Gradient Descent)**
+
+- **Backend tính toán:**
+  - Nếu có GPU + CUDA: dùng `CuPy` (tốc độ cao)  
+  - Nếu không: dùng `NumPy` (tốc độ bình thường)
+
+### 5.2. Minimax Agent
+
+- Thuật toán **Minimax + Alpha-Beta Pruning**  
+- Độ sâu mặc định: `depth = 3`  
+- Hàm đánh giá (evaluation function):
+  - **Material**: giá trị quân (Pawn, Knight, Bishop, Rook, Queen, King)  
+  - **Piece-Square Tables (PST)**: mỗi quân có bảng điểm vị trí riêng cho trung cuộc / tàn cuộc  
+  - Nội suy giữa **Middle Game** và **End Game** dựa trên số lượng quân trên bàn  
+
+---
+
+## 6. Kết quả kỳ vọng
+
+Trong điều kiện train và benchmark hợp lý, kỳ vọng:
+
+| Cặp đấu                      | Win-rate kỳ vọng (tham khảo) |
+| ---------------------------- | ----------------------------- |
+| Minimax (Depth 3) vs Random | ≥ 90% (thường ~95% trở lên)  |
+| MLP (Scratch) vs Random     | ≥ 60% (phụ thuộc chất lượng train) |
+
+> **Mô tả:** Thử nghiệm chạy **500 ván đấu liên tiếp** (Tournament Mode) để kiểm tra độ ổn định và tỷ lệ thắng của các thuật toán AI so với đối thủ ngẫu nhiên (Random Agent).
+
+## 🏆 Tổng hợp So sánh
+
+| Agent (Phe Trắng) | Đối thủ (Phe Đen) | Số ván | Tỷ lệ Thắng | Tốc độ trung bình | Kết quả |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Minimax (Depth 3)** | Random | 500 | **98.4%** | 2.44 s/ván | ✅ ĐẠT (>90%) |
+| **MLP Agent (Scratch)** | Random | 500 | **99.0%** | **0.27 s/ván** | ✅ ĐẠT (>60%) |
+
+---
+
+## 📝 Chi tiết Thử nghiệm
+
+### 1. Minimax Agent (Alpha-Beta Pruning)
+* **Cấu hình:** Độ sâu (Depth) = 3.
+* **Đối thủ:** Random Agent.
+* **Thời gian chạy:** 1218.71 giây (~20 phút).
+
+**Kết quả thống kê:**
+* 🏳️ **Thắng:** 492 ván (98.4%)
+* 🏴 **Thua:** 0 ván (0.0%)
+* 🤝 **Hòa:** 8 ván (1.6%)
+
+> **Nhận xét:** Thuật toán Minimax hoạt động rất ổn định, không thua ván nào. Tuy nhiên, tốc độ tính toán khá chậm (2.44s/nước) do phải duyệt cây tìm kiếm.
+
+---
+
+### 2. MLP Agent
+* **Cấu hình:** Mạng MLP (Linear -> ReLU -> Tanh), chạy trên GPU (CuPy).
+* **Đối thủ:** Random Agent.
+* **Thời gian chạy:** 133.85 giây (~2 phút).
+
+**Kết quả thống kê:**
+* 🏳️ **Thắng:** 495 ván (99.0%)
+* 🏴 **Thua:** 2 ván (0.4%)
+* 🤝 **Hòa:** 3 ván (0.6%)
+
+### 3. MLP Agent vs Minimax Agent
+* **Cấu hình:** Mạng MLP (Linear -> ReLU -> Tanh), chạy trên GPU (CuPy).
+* **Đối thủ:** Minimax Agent.
+* **Thời gian chạy:** 740.11 giây.
+
+**Kết quả thống kê:**
+* 🏳️ **Thắng:** 0 thắng (0.0%)
+* 🏴 **Thua:** 500 thắng (100.0%)
+* 🤝 **Hòa:** 0 ván (0.0%)
+---
+## 📉 Phân tích Thất bại: MLP vs Minimax
+
+> **Hiện tượng:** Trong thử nghiệm đối đầu trực tiếp, MLP Agent (độ sâu 1) thua 100% trước Minimax Agent (độ sâu 3).
+
+**Nguyên nhân kỹ thuật:**
+1.  **Thiếu khả năng tìm kiếm (Lack of Search):**
+    * **Minimax:** Sử dụng thuật toán Alpha-Beta Pruning để duyệt cây trò chơi với độ sâu 3 (nhìn trước ~3-4 nước đi). Nó có thể phát hiện các bẫy chiến thuật (Tactical traps) và tránh các nước đi sai lầm dẫn đến mất quân.
+    * **MLP Agent:** Hoạt động theo cơ chế **Greedy (Tham lam)**. Nó chọn nước đi có điểm số cao nhất dựa trên trạng thái hiện tại mà không kiểm chứng hậu quả trong tương lai. Điều này khiến MLP dễ bị Minimax gài bẫy.
+
+2.  **Bản chất của hàm đánh giá (Evaluation Function):**
+    * Mạng MLP học được trực giác (Intuition) từ dữ liệu (Vị trí tốt, cấu trúc tốt).
+    * Tuy nhiên, trong cờ vua, một sai lầm chiến thuật nhỏ (blunder) sẽ phá hỏng mọi lợi thế về vị trí. Minimax là thuật toán tối ưu để trừng phạt các sai lầm này.
+
+**Kết luận:**
+Mạng Nơ-ron (MLP) làm rất tốt việc đánh giá thế cờ tổng quát (thắng Random 99%), nhưng để trở thành một cao thủ, nó cần được kết hợp với thuật toán tìm kiếm (Search Algorithm).
+## 7. License
+MIT

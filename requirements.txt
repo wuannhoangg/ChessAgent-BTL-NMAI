@@ -1,0 +1,8 @@
+chess
+pandas
+numpy
+datasets
+tqdm
+scikit-learn
+pygame
+requests

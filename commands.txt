@@ -1,0 +1,7 @@
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+py -3.11 -m venv venv-3.11
+
+venv-3.11\Scripts\activate
+
+python training/train_mlp.py --resume-from training/best_model_mlp.npz --finetune-data training/dataset_large_finetune.csv --output-path training/mlp_pro_v1.npz --epochs 10 --lr 0.001
